@@ -1,0 +1,6 @@
+extends:
+  - minimal
+
+rules:
+  # The checked-in contract is intentionally executable against local Compose.
+  no-server-example.com: off

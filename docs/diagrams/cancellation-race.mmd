@@ -1,0 +1,18 @@
+sequenceDiagram
+  participant C as Customer
+  participant P as Platform
+  participant V as Venue
+  participant S as Staff
+  C->>P: POST /orders/{id}/cancel
+  P->>P: cancellation_status=requested + outbox
+  par Serialized on venue order row
+    P->>V: cancel
+  and
+    S->>V: start-preparing
+  end
+  alt cancel wins
+    V->>V: release stock once + cancelled event
+  else preparing wins
+    V->>V: preparing event + stable rejected cancellation
+  end
+  V-->>P: stable decision and ordered callback

@@ -1,0 +1,9 @@
+flowchart LR
+  Customer[Customer client] -->|REST + tracking token| Platform[Avito.Kitchen Go service]
+  Staff[Venue operator] -->|Management REST| Venue[Example Venue Go service]
+  Venue -->|Menu and ordered callbacks| Platform
+  Platform -->|Confirmation and cancellation| Venue
+  Platform --> PlatformDB[(Platform PostgreSQL)]
+  Venue --> VenueDB[(Venue PostgreSQL)]
+  Swagger[Swagger UI] -.-> Platform
+  Swagger -.-> Venue

@@ -1,0 +1,12 @@
+journey
+  title Customer journey
+  section Discovery
+    Browse venues: 5: Customer
+    Read versioned menu: 5: Customer, Platform
+  section Order
+    Submit idempotent checkout: 4: Customer, Platform
+    Wait for venue confirmation: 3: Platform, Venue
+    Poll with tracking token: 4: Customer, Platform
+  section Fulfilment
+    Track preparing and ready: 4: Customer, Venue
+    Complete or safely cancel: 5: Customer, Platform, Venue

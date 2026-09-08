@@ -1,0 +1,1324 @@
+openapi: 3.1.0
+info:
+  title: Avito.Kitchen API
+  version: 0.7.0
+  description: |
+    Contract-first API for the Avito.Kitchen platform and the example venue
+    integration. The public catalog and authenticated menu synchronization are
+    implemented. Order checkout is durably accepted into the transactional
+    outbox and a bounded worker reliably delivers it to the example venue. The
+    venue atomically decides and reserves incoming orders. Venue management
+    transitions and ordered, idempotent callbacks to the platform are
+    implemented. Public order tracking and safe cancellation use a per-order
+    capability token; no business endpoint remains a placeholder.
+servers:
+  - url: http://localhost:8080
+    description: Avito.Kitchen platform
+security: []
+tags:
+  - name: System
+    description: Liveness and readiness endpoints
+  - name: Catalog
+    description: Public venue and menu read API
+  - name: Orders
+    description: Public checkout, tracking, and cancellation API
+  - name: Partner
+    description: Closed API called by authenticated venues
+  - name: Venue integration
+    description: Closed API called by Avito.Kitchen on the example venue
+  - name: Venue management
+    description: Closed operator API of the example venue
+paths:
+  /healthz:
+    get:
+      servers:
+        - url: http://localhost:8080
+          description: Avito.Kitchen platform
+        - url: http://localhost:8090
+          description: Example venue service
+      tags: [System]
+      operationId: serviceHealth
+      summary: Check current service process health
+      responses:
+        "200":
+          description: Process is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /readyz:
+    get:
+      servers:
+        - url: http://localhost:8080
+          description: Avito.Kitchen platform
+        - url: http://localhost:8090
+          description: Example venue service
+      tags: [System]
+      operationId: serviceReadiness
+      summary: Check database and migration readiness of the current service
+      responses:
+        "200":
+          description: Process is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /metrics:
+    get:
+      servers:
+        - url: http://localhost:8080
+          description: Avito.Kitchen platform
+        - url: http://localhost:8090
+          description: Example venue service
+      tags: [System]
+      operationId: serviceMetrics
+      summary: Read process-local Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/v1/venues:
+    get:
+      tags: [Catalog]
+      operationId: listVenues
+      summary: List venues available to the web client
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Venue page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenuePage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/venues/{venue_id}:
+    parameters:
+      - $ref: "#/components/parameters/VenueID"
+    get:
+      tags: [Catalog]
+      operationId: getVenue
+      summary: Get venue details
+      responses:
+        "200":
+          description: Venue details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Venue"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/venues/{venue_id}/menu:
+    parameters:
+      - $ref: "#/components/parameters/VenueID"
+    get:
+      tags: [Catalog]
+      operationId: getVenueMenu
+      summary: Get the platform read-model of a venue menu
+      description: |
+        Returns one bounded, version-consistent menu snapshot. Menu pagination
+        is intentionally not used so a client cannot combine different menu
+        versions while following cursors.
+      responses:
+        "200":
+          description: Current synchronized menu
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Menu"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/orders:
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Persist an order and schedule venue confirmation
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "202":
+          description: Order persisted and awaiting venue confirmation
+          headers:
+            Location:
+              description: URL of the created order
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOrderResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/RequestTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/orders/{order_id}:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+      - $ref: "#/components/parameters/OrderToken"
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Get an order for status polling
+      responses:
+        "200":
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/orders/{order_id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+      - $ref: "#/components/parameters/OrderToken"
+    post:
+      tags: [Orders]
+      operationId: cancelOrder
+      summary: Request order cancellation
+      responses:
+        "202":
+          description: Cancellation request accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /partner/v1/menu:
+    put:
+      tags: [Partner]
+      operationId: replacePartnerMenu
+      summary: Atomically replace the authenticated venue menu snapshot
+      security:
+        - partnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceMenuRequest"
+      responses:
+        "204":
+          description: Snapshot accepted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/RequestTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /partner/v1/availability:
+    patch:
+      tags: [Partner]
+      operationId: updatePartnerAvailability
+      summary: Change whether the authenticated venue accepts orders
+      security:
+        - partnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityUpdate"
+      responses:
+        "204":
+          description: Availability updated
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/RequestTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /partner/v1/orders/{order_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    post:
+      tags: [Partner]
+      operationId: recordPartnerOrderEvent
+      summary: Record an idempotent, ordered venue event
+      security:
+        - partnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderEvent"
+      responses:
+        "204":
+          description: Event accepted or already processed
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/RequestTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /integration/v1/orders:
+    post:
+      tags: [Venue integration]
+      operationId: decideVenueOrder
+      summary: Ask the example venue to accept or reject an order
+      servers:
+        - url: http://localhost:8090
+          description: Example venue service
+      security:
+        - platformBearer: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VenueOrderCommand"
+      responses:
+        "200":
+          description: Stable decision for this platform order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueOrderDecision"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/RequestTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /integration/v1/orders/{order_id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    post:
+      tags: [Venue integration]
+      operationId: cancelVenueOrder
+      summary: Ask the example venue to cancel an order idempotently
+      servers:
+        - url: http://localhost:8090
+          description: Example venue service
+      security:
+        - platformBearer: []
+      responses:
+        "200":
+          description: Stable result of the cancellation command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueCancellationDecision"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /management/v1/orders:
+    get:
+      tags: [Venue management]
+      operationId: listManagedVenueOrders
+      summary: List orders visible to the example venue operator
+      servers:
+        - url: http://localhost:8090
+          description: Example venue service
+      security:
+        - venueStaffBearer: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/VenueOrderStatus"
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Venue order page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueOrderPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /management/v1/orders/{order_id}:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    get:
+      tags: [Venue management]
+      operationId: getManagedVenueOrder
+      summary: Get an order for the example venue operator
+      servers:
+        - url: http://localhost:8090
+          description: Example venue service
+      security:
+        - venueStaffBearer: []
+      responses:
+        "200":
+          description: Venue order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueManagedOrder"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /management/v1/orders/{order_id}/start-preparing:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    post:
+      tags: [Venue management]
+      operationId: startPreparingManagedVenueOrder
+      summary: Move an accepted venue order to preparing
+      servers:
+        - url: http://localhost:8090
+          description: Example venue service
+      security:
+        - venueStaffBearer: []
+      responses:
+        "200":
+          description: Updated venue order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueManagedOrder"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /management/v1/orders/{order_id}/mark-ready:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    post:
+      tags: [Venue management]
+      operationId: markReadyManagedVenueOrder
+      summary: Move a preparing venue order to ready
+      servers:
+        - url: http://localhost:8090
+          description: Example venue service
+      security:
+        - venueStaffBearer: []
+      responses:
+        "200":
+          description: Updated venue order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueManagedOrder"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /management/v1/orders/{order_id}/complete:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    post:
+      tags: [Venue management]
+      operationId: completeManagedVenueOrder
+      summary: Move a ready venue order to completed
+      servers:
+        - url: http://localhost:8090
+          description: Example venue service
+      security:
+        - venueStaffBearer: []
+      responses:
+        "200":
+          description: Updated venue order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VenueManagedOrder"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  securitySchemes:
+    partnerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque partner token
+    platformBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque platform token
+    venueStaffBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque venue staff token
+  parameters:
+    VenueID:
+      name: venue_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderID:
+      name: order_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    OrderToken:
+      name: X-Order-Token
+      in: header
+      required: true
+      description: Opaque token returned only when the order is created
+      schema:
+        type: string
+        minLength: 32
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    RequestTooLarge:
+      description: Request body exceeds the configured limit
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: Missing or invalid credential
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Authenticated actor is not allowed to access the resource
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: State, version, or idempotency conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ValidationFailed:
+      description: A well-formed request violates field constraints
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    TooManyRequests:
+      description: Request rate limit exceeded
+      headers:
+        Retry-After:
+          description: Seconds until the client may retry
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalError:
+      description: Unexpected internal error
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: Service or a critical dependency is temporarily unavailable
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          examples: [ok]
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, detail, request_id]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        detail:
+          type: string
+        request_id:
+          type: string
+          format: uuid
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_REQUEST
+        - INVALID_CONTENT_TYPE
+        - REQUEST_TOO_LARGE
+        - INVALID_INTEGRATION_REQUEST
+        - UNAUTHORIZED
+        - FORBIDDEN
+        - VENUE_NOT_FOUND
+        - MENU_NOT_FOUND
+        - ORDER_NOT_FOUND
+        - VALIDATION_FAILED
+        - TOO_MANY_REQUESTS
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+        - VENUE_CLOSED
+        - MENU_VERSION_CONFLICT
+        - STALE_MENU_VERSION
+        - MENU_CHANGED
+        - ITEMS_UNAVAILABLE
+        - IDEMPOTENCY_KEY_REUSED
+        - INVALID_ORDER_TRANSITION
+        - ORDER_CANCELLATION_NOT_ALLOWED
+        - EVENT_SEQUENCE_CONFLICT
+        - ORDER_ALREADY_TERMINAL
+        - INTEGRATION_STATE_CONFLICT
+        - UPSTREAM_BAD_RESPONSE
+        - VENUE_UNAVAILABLE
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount in the currency's minimal units
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          examples: [RUB]
+    VenueSummary:
+      type: object
+      additionalProperties: false
+      required: [id, name, is_accepting_orders, minimum_order_amount, currency]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        is_accepting_orders:
+          type: boolean
+        minimum_order_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          examples: [RUB]
+    Venue:
+      type: object
+      additionalProperties: false
+      required: [id, name, is_accepting_orders, minimum_order_amount, currency, address]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        is_accepting_orders:
+          type: boolean
+        minimum_order_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          examples: [RUB]
+        address:
+          type: string
+          minLength: 1
+          maxLength: 500
+    VenuePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VenueSummary"
+        next_cursor:
+          type: [string, "null"]
+    MenuItem:
+      type: object
+      additionalProperties: false
+      required: [id, external_id, name, price, is_available]
+      properties:
+        id:
+          type: string
+          format: uuid
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          $ref: "#/components/schemas/Money"
+        is_available:
+          type: boolean
+    MenuCategory:
+      type: object
+      additionalProperties: false
+      required: [external_id, name, items]
+      properties:
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        items:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/MenuItem"
+    Menu:
+      type: object
+      additionalProperties: false
+      required: [venue_id, version, updated_at, categories]
+      properties:
+        venue_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        updated_at:
+          type: string
+          format: date-time
+        categories:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/MenuCategory"
+    OrderItemRequest:
+      type: object
+      additionalProperties: false
+      required: [menu_item_id, quantity]
+      properties:
+        menu_item_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 100
+    DeliveryAddress:
+      type: object
+      additionalProperties: false
+      required: [city, street, house]
+      properties:
+        city:
+          type: string
+          minLength: 1
+          maxLength: 200
+        street:
+          type: string
+          minLength: 1
+          maxLength: 200
+        house:
+          type: string
+          minLength: 1
+          maxLength: 50
+        apartment:
+          type: string
+          maxLength: 50
+    Delivery:
+      type: object
+      additionalProperties: false
+      required: [address, phone]
+      properties:
+        address:
+          $ref: "#/components/schemas/DeliveryAddress"
+        phone:
+          type: string
+          pattern: "^\\+[1-9][0-9]{7,14}$"
+        comment:
+          type: string
+          maxLength: 500
+    CreateOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [customer_ref, venue_id, menu_version, items, delivery]
+      properties:
+        customer_ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+        venue_id:
+          type: string
+          format: uuid
+        menu_version:
+          type: integer
+          format: int64
+          minimum: 1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/OrderItemRequest"
+        delivery:
+          $ref: "#/components/schemas/Delivery"
+    OrderItem:
+      type: object
+      additionalProperties: false
+      required: [menu_item_id, external_item_id, name, quantity, unit_price, total_price]
+      properties:
+        menu_item_id:
+          type: string
+          format: uuid
+        external_item_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 100
+        unit_price:
+          type: integer
+          format: int64
+          minimum: 0
+        total_price:
+          type: integer
+          format: int64
+          minimum: 0
+    OrderStatus:
+      type: string
+      enum:
+        - pending_confirmation
+        - accepted
+        - preparing
+        - ready
+        - completed
+        - rejected
+        - confirmation_expired
+        - cancelled
+    CancellationStatus:
+      type: string
+      enum: [none, requested, confirmed, rejected, failed]
+    Order:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - customer_ref
+        - venue_id
+        - status
+        - cancellation_status
+        - items
+        - items_amount
+        - delivery_amount
+        - total_amount
+        - currency
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        customer_ref:
+          type: string
+        venue_id:
+          type: string
+          format: uuid
+        external_order_id:
+          type: [string, "null"]
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        cancellation_status:
+          $ref: "#/components/schemas/CancellationStatus"
+        rejection_reason:
+          type: [string, "null"]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        items_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        delivery_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        total_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateOrderResponse:
+      type: object
+      additionalProperties: false
+      required: [order, tracking_token]
+      properties:
+        order:
+          $ref: "#/components/schemas/Order"
+        tracking_token:
+          type: string
+          minLength: 32
+    PartnerMenuItem:
+      type: object
+      additionalProperties: false
+      required: [external_id, name, price, is_available]
+      properties:
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          $ref: "#/components/schemas/Money"
+        is_available:
+          type: boolean
+    PartnerMenuCategory:
+      type: object
+      additionalProperties: false
+      required: [external_id, name, items]
+      properties:
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        items:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/PartnerMenuItem"
+    ReplaceMenuRequest:
+      type: object
+      additionalProperties: false
+      required: [version, categories]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        categories:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/PartnerMenuCategory"
+    AvailabilityUpdate:
+      type: object
+      additionalProperties: false
+      required: [is_accepting_orders]
+      properties:
+        is_accepting_orders:
+          type: boolean
+        reason:
+          type: string
+          maxLength: 200
+    OrderEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, sequence, type, occurred_at]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+        type:
+          type: string
+          enum: [order_preparing, order_ready, order_completed, order_cancelled]
+        occurred_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          maxLength: 500
+    VenueOrderItem:
+      type: object
+      additionalProperties: false
+      required: [external_item_id, name, quantity, expected_unit_price]
+      properties:
+        external_item_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 100
+        expected_unit_price:
+          type: integer
+          format: int64
+          minimum: 0
+    VenueOrderCommand:
+      type: object
+      additionalProperties: false
+      required: [platform_order_id, menu_version, items]
+      properties:
+        platform_order_id:
+          type: string
+          format: uuid
+        menu_version:
+          type: integer
+          format: int64
+          minimum: 1
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/VenueOrderItem"
+    VenueOrderDecision:
+      oneOf:
+        - $ref: "#/components/schemas/VenueOrderAcceptedDecision"
+        - $ref: "#/components/schemas/VenueOrderRejectedDecision"
+      discriminator:
+        propertyName: result
+        mapping:
+          accepted: "#/components/schemas/VenueOrderAcceptedDecision"
+          rejected: "#/components/schemas/VenueOrderRejectedDecision"
+    VenueOrderAcceptedDecision:
+      type: object
+      additionalProperties: false
+      required: [result, external_order_id, accepted_items_amount, currency]
+      properties:
+        result:
+          type: string
+          const: accepted
+        external_order_id:
+          type: string
+          format: uuid
+        accepted_items_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+    VenueOrderRejectedDecision:
+      type: object
+      additionalProperties: false
+      required: [result, reason]
+      properties:
+        result:
+          type: string
+          const: rejected
+        reason:
+          type: string
+          enum: [items_unavailable, menu_changed, venue_closed]
+        current_menu_version:
+          type: integer
+          format: int64
+          minimum: 1
+        unavailable_item_ids:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+    VenueCancellationDecision:
+      type: object
+      additionalProperties: false
+      required: [result, current_status]
+      properties:
+        result:
+          type: string
+          enum: [cancelled, rejected]
+        current_status:
+          $ref: "#/components/schemas/VenueOrderStatus"
+        reason:
+          type: string
+          enum: [cancellation_not_allowed]
+    VenueOrderStatus:
+      type: string
+      enum: [accepted, preparing, ready, completed, rejected, cancelled]
+    VenueManagedOrderItem:
+      type: object
+      additionalProperties: false
+      required: [external_item_id, name, quantity, unit_price, total_price]
+      properties:
+        external_item_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 100
+        unit_price:
+          type: integer
+          format: int64
+          minimum: 0
+        total_price:
+          type: integer
+          format: int64
+          minimum: 0
+    VenueManagedOrder:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - platform_order_id
+        - status
+        - items
+        - items_amount
+        - currency
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        platform_order_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/VenueOrderStatus"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VenueManagedOrderItem"
+        items_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    VenueOrderPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VenueManagedOrder"
+        next_cursor:
+          type: [string, "null"]

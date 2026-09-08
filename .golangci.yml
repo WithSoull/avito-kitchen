@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - exhaustive
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - staticcheck
+  disable:
+    - revive
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -1,0 +1,5 @@
+erDiagram
+  VENUE_ORDERS ||--|{ VENUE_ORDER_ITEMS : snapshots
+  VENUE_ORDERS ||--o{ VENUE_OUTBOX : emits
+  VENUE_MENU_VERSIONS ||--o{ VENUE_MENU_ITEMS : describes
+  VENUE_SETTINGS ||--|| VENUE_SETTINGS : singleton

@@ -1,0 +1,8 @@
+erDiagram
+  VENUES ||--o{ MENU_CATEGORIES : owns
+  VENUES ||--o{ MENU_ITEMS : owns
+  VENUES ||--o{ ORDERS : receives
+  ORDERS ||--|{ ORDER_ITEMS : snapshots
+  ORDERS ||--o{ ORDER_STATUS_HISTORY : records
+  ORDERS ||--o{ PARTNER_ORDER_EVENTS : deduplicates
+  ORDERS ||--o{ OUTBOX : dispatches

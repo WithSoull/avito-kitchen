@@ -1,0 +1,152 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: avito_kitchen
+      POSTGRES_USER: avito
+      POSTGRES_PASSWORD: avito
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avito -d avito_kitchen"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  baseline-platform:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: avito
+    command: ["psql", "-v", "ON_ERROR_STOP=1", "-h", "postgres", "-U", "avito", "-d", "avito_kitchen", "-f", "/baseline/platform.sql"]
+    volumes:
+      - ./deploy/postgres/baseline:/baseline:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  baseline-venue:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: avito
+    command: ["psql", "-v", "ON_ERROR_STOP=1", "-h", "postgres", "-U", "avito", "-d", "venue", "-f", "/baseline/venue.sql"]
+    volumes:
+      - ./deploy/postgres/baseline:/baseline:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate-platform:
+    image: migrate/migrate:v4.19.1
+    command: ["-path=/migrations", "-database=postgres://avito:avito@postgres:5432/avito_kitchen?sslmode=disable", "up"]
+    volumes:
+      - ./migrations/platform:/migrations:ro
+    depends_on:
+      baseline-platform:
+        condition: service_completed_successfully
+
+  migrate-venue:
+    image: migrate/migrate:v4.19.1
+    command: ["-path=/migrations", "-database=postgres://avito:avito@postgres:5432/venue?sslmode=disable", "up"]
+    volumes:
+      - ./migrations/venue:/migrations:ro
+    depends_on:
+      baseline-venue:
+        condition: service_completed_successfully
+
+  avito-kitchen:
+    build:
+      context: .
+      args:
+        BINARY: avito-kitchen
+    environment:
+      APP_ENV: local
+      HTTP_ADDR: :8080
+      DATABASE_URL: postgres://avito:avito@postgres:5432/avito_kitchen?sslmode=disable
+      VENUE_BASE_URL: http://venue:8090
+      PARTNER_TOKEN: ${PARTNER_TOKEN:-dev-partner-token}
+      PLATFORM_TOKEN: ${PLATFORM_TOKEN:-dev-platform-token}
+      ORDER_TOKEN_SECRET: ${ORDER_TOKEN_SECRET:-dev-order-token-secret-change-me-32-bytes}
+      ORDER_CONFIRMATION_TIMEOUT: ${ORDER_CONFIRMATION_TIMEOUT:-2m}
+      VENUE_REQUEST_TIMEOUT: ${VENUE_REQUEST_TIMEOUT:-3s}
+      OUTBOX_POLL_INTERVAL: ${OUTBOX_POLL_INTERVAL:-500ms}
+      OUTBOX_LEASE: ${OUTBOX_LEASE:-10s}
+      OUTBOX_WORKERS: ${OUTBOX_WORKERS:-2}
+      OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS:-5}
+      CHECKOUT_CONCURRENCY: ${CHECKOUT_CONCURRENCY:-32}
+      CHECKOUT_RATE_LIMIT: ${CHECKOUT_RATE_LIMIT:-100}
+      PARTNER_VENUE_ID: ${PARTNER_VENUE_ID:-00000000-0000-4000-8000-000000000001}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8081}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5s}
+      DB_QUERY_TIMEOUT: ${DB_QUERY_TIMEOUT:-3s}
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-10}
+      DB_MIN_CONNS: ${DB_MIN_CONNS:-1}
+      SHUTDOWN_TIMEOUT: 10s
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate-platform:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  venue:
+    build:
+      context: .
+      args:
+        BINARY: venue
+    environment:
+      APP_ENV: ${VENUE_APP_ENV:-local}
+      HTTP_ADDR: :8090
+      DATABASE_URL: postgres://avito:avito@postgres:5432/venue?sslmode=disable
+      PLATFORM_BASE_URL: http://avito-kitchen:8080
+      PLATFORM_REQUEST_TIMEOUT: ${PLATFORM_REQUEST_TIMEOUT:-3s}
+      MENU_PUBLISH_TIMEOUT: ${MENU_PUBLISH_TIMEOUT:-10s}
+      CALLBACK_POLL_INTERVAL: ${CALLBACK_POLL_INTERVAL:-500ms}
+      CALLBACK_LEASE: ${CALLBACK_LEASE:-10s}
+      CALLBACK_WORKERS: ${CALLBACK_WORKERS:-2}
+      VENUE_TEST_DECISION_DELAY: ${VENUE_TEST_DECISION_DELAY:-0s}
+      VENUE_TEST_DECISION_STATUS: ${VENUE_TEST_DECISION_STATUS:-0}
+      PARTNER_TOKEN: ${PARTNER_TOKEN:-dev-partner-token}
+      PLATFORM_TOKEN: ${PLATFORM_TOKEN:-dev-platform-token}
+      VENUE_STAFF_TOKEN: ${VENUE_STAFF_TOKEN:-dev-venue-staff-token}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8081}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5s}
+      DB_QUERY_TIMEOUT: ${DB_QUERY_TIMEOUT:-3s}
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-10}
+      DB_MIN_CONNS: ${DB_MIN_CONNS:-1}
+      SHUTDOWN_TIMEOUT: 10s
+    ports:
+      - "8090:8090"
+    depends_on:
+      migrate-venue:
+        condition: service_completed_successfully
+      avito-kitchen:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.18.2
+    environment:
+      SWAGGER_JSON: /spec/openapi.yaml
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./api/openapi.yaml:/spec/openapi.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/openapi.yaml"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
