@@ -2,42 +2,50 @@
 
 ## Быстрая диагностика
 
-1. Проверить `/healthz`, затем `/readyz` обоих сервисов и `docker compose ps`.
-2. Найти `order_id` в структурированных логах: confirmation/cancellation и
-   callback workers пишут attempt, result и terminal-флаг без PII.
-3. Проверить очереди:
+1. Проверить `docker compose ps`, затем `/healthz` и `/readyz` обоих сервисов.
+2. Найти `order_id` в логах platform и venue.
+3. Проверить необработанные jobs:
 
 ```sql
 SELECT event_type, count(*), min(created_at)
-FROM outbox WHERE processed_at IS NULL GROUP BY event_type;
+FROM outbox
+WHERE processed_at IS NULL
+GROUP BY event_type;
 
 SELECT event_type, count(*), min(created_at)
-FROM venue_outbox WHERE processed_at IS NULL GROUP BY event_type;
+FROM venue_outbox
+WHERE processed_at IS NULL
+GROUP BY event_type;
 ```
 
-4. Проверить `/metrics`: HTTP requests/errors/суммарную latency и счётчики
-   фоновых jobs. Для возраста очереди источником истины остаются SQL-запросы.
+4. Сверить attempts, `last_error`, `available_at`, `locked_until` и
+   `processed_at` конкретной job.
 
-## Stuck outbox
+## Зависшая outbox job
 
-- `locked_until` в прошлом безопасно подхватывается другим worker-ом.
-- Lease в будущем означает выполняющийся HTTP-вызов; сначала сверить timeout и
-  логи, не менять строку вручную.
-- `last_error` показывает класс последней доставки, но не содержит upstream
-  body или credentials.
-- После исправления зависимости retry произойдёт автоматически. Ручной replay
-  допустим только изменением `available_at`, без изменения payload/event ID.
+- `locked_until` в прошлом означает, что job доступна следующему worker.
+- Lease в будущем обычно означает выполняющийся HTTP-запрос. Сначала проверить
+  request timeout и логи; не снимать lock вручную у работающего worker.
+- После исправления временной зависимости retry произойдёт автоматически.
+- Ручной replay допустим изменением `available_at`. Нельзя менять payload,
+  aggregate/event ID или обнулять attempts без разбора причины.
 
-## Недоступное venue/platform API
+## Недоступен другой сервис
 
-- Проверить service token, DNS Compose и readiness получателя.
-- Confirmation имеет deadline и завершится `confirmation_expired`.
-- Cancellation после исчерпания попыток станет `failed`; повтор пользователя
-  создаёт новую команду только если основной статус ещё `accepted`.
-- Venue callbacks повторяются с capped backoff и тем же `event_id/sequence`.
+- Проверить service token, Compose DNS, `/readyz` получателя и timeout клиента.
+- Venue callbacks повторяются с тем же `event_id` и `sequence`.
+- Cancellation после исчерпания попыток становится `failed`; пользователь может
+  повторить её, только пока основной status остаётся `accepted`.
+- Confirmation после deadline становится `confirmation_expired` и больше не
+  сверяется автоматически.
+
+Если platform показывает `confirmation_expired`, проверить `venue_orders` по
+`platform_order_id` до повторного оформления. Venue могло сохранить `accepted`
+до потери HTTP-ответа. Автоматической reconciliation этого случая в MVP нет.
 
 ## Безопасность
 
-Не писать в логи Bearer и tracking tokens, delivery address, phone и полный
-payload. При подозрении на утечку заменить service secret и перезапустить оба
-сервиса. Tracking token восстановить нельзя: в БД хранится только SHA-256 hash.
+В логи не должны попадать Bearer/tracking tokens, телефон, адрес доставки и
+полный payload заказа. При утечке service token заменить secret и перезапустить
+оба сервиса. Tracking token восстановить нельзя: в БД хранится только SHA-256
+hash.

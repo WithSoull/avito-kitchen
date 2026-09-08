@@ -1,110 +1,90 @@
 # Машина состояний заказа
 
-## Решение
+Platform хранит основной `status` заказа и отдельный `cancellation_status`.
+Разделение нужно потому, что во время удалённой отмены заказ всё ещё остаётся
+`accepted` и может одновременно перейти в `preparing`.
 
-Основной `status` описывает только подтверждение и выполнение заказа. Состояние
-запроса пользовательской отмены хранится отдельно в `cancellation_status`.
-
-Это исключает неоднозначность состояния `cancellation_requested`: один такой
-status не позволяет понять, был заказ принят, началось ли приготовление и что
-показывать оператору заведения.
-
-## Основные состояния
+## Основной status
 
 | Status | Значение | Terminal |
 |---|---|---:|
-| `pending_confirmation` | Заказ сохранён, ожидается решение заведения | нет |
-| `accepted` | Заведение подтвердило цену, наличие и резерв | нет |
-| `preparing` | Заведение начало приготовление | нет |
-| `ready` | Заказ приготовлен | нет |
-| `completed` | Заказ передан/завершён в рамках MVP | да |
-| `rejected` | Заведение явно отклонило заказ | да |
-| `confirmation_expired` | Platform не получила достоверное решение до deadline | да |
-| `cancelled` | Отмена подтверждена либо заведение остановило заказ | да |
+| `pending_confirmation` | Заказ сохранён, решение venue неизвестно | нет |
+| `accepted` | Venue подтвердило цену, наличие и резерв | нет |
+| `preparing` | Приготовление началось | нет |
+| `ready` | Заказ готов | нет |
+| `completed` | Заказ завершён | да |
+| `rejected` | Venue явно отклонило заказ | да |
+| `confirmation_expired` | Platform не получила решение до deadline | да для текущей реализации |
+| `cancelled` | Отмена подтверждена или заказ остановлен venue | да |
 
-## Состояния пользовательской отмены
+Разрешённые переходы:
 
-| Cancellation status | Значение |
+| From | To | Источник |
+|---|---|---|
+| — | `pending_confirmation` | checkout platform |
+| `pending_confirmation` | `accepted` | решение venue |
+| `pending_confirmation` | `rejected` | решение venue |
+| `pending_confirmation` | `confirmation_expired` | confirmation worker |
+| `accepted` | `preparing` | callback venue |
+| `accepted` | `cancelled` | подтверждённая отмена |
+| `preparing` | `ready` | callback venue |
+| `preparing` | `cancelled` | операционная отмена venue |
+| `ready` | `completed` | callback venue |
+
+Поздний HTTP-ответ не меняет terminal-заказ. Из-за этого
+`confirmation_expired` может скрывать уже сохранённый `accepted` в venue. До
+реализации reconciliation этот случай требует ручной сверки.
+
+## Cancellation status
+
+| Status | Значение |
 |---|---|
 | `none` | Отмена не запрашивалась |
-| `requested` | Команда сохранена и ожидает решения заведения |
-| `confirmed` | Заведение подтвердило отмену и освободило резерв |
-| `rejected` | Отмена проиграла гонку началу приготовления |
-| `failed` | Достоверный результат не получен после ограниченных retries |
+| `requested` | Команда отмены ожидает решения venue |
+| `confirmed` | Venue отменило заказ и освободило резерв |
+| `rejected` | Отмена проиграла началу приготовления |
+| `failed` | Достоверный результат не получен |
 
-`failed` консервативно сохраняет основной status. Платформа не заявляет, что
-заказ отменён, пока venue service этого не подтвердил. Повторный запрос отмены
-может перевести `failed → requested`, если основной status всё ещё `accepted`.
-
-## Разрешённые переходы основного status
-
-| From | To | Actor/source | Условие |
-|---|---|---|---|
-| — | `pending_confirmation` | platform checkout | Заказ, snapshot и outbox созданы одной транзакцией |
-| `pending_confirmation` | `accepted` | platform confirmation worker | Venue вернул сохранённое решение `accepted` до deadline |
-| `pending_confirmation` | `rejected` | platform confirmation worker | Venue вернул `rejected` |
-| `pending_confirmation` | `confirmation_expired` | platform confirmation worker | Исчерпан confirmation deadline |
-| `accepted` | `preparing` | venue event | Оператор выполнил `start-preparing` |
-| `accepted` | `cancelled` | venue/platform | Подтверждена пользовательская или операционная отмена |
-| `preparing` | `ready` | venue event | Оператор выполнил `mark-ready` |
-| `preparing` | `cancelled` | venue event | Только операционная отмена заведением с причиной |
-| `ready` | `completed` | venue event | Оператор выполнил `complete` |
-
-Любой переход из `completed`, `rejected`, `confirmation_expired` или `cancelled`
-запрещён. Поздний ответ не может воскресить terminal-заказ.
-
-`confirmation_expired` является terminal только для текущей публичной машины
-состояний. При потере HTTP-ответа удалённое решение venue может уже существовать;
-автоматическая reconciliation и компенсация такого решения остаются известным
-ограничением MVP.
-
-## Разрешённые переходы cancellation status
+Разрешённые переходы:
 
 | From | To | Условие |
 |---|---|---|
 | `none` | `requested` | Основной status равен `accepted` |
-| `requested` | `confirmed` | Venue атомарно отменило `accepted` заказ; основной status становится `cancelled` |
-| `requested` | `rejected` | Venue уже начало приготовление; основной status становится/остаётся `preparing` |
-| `requested` | `failed` | Результат неизвестен после ограниченной политики повторов |
-| `failed` | `requested` | Пользователь повторил отмену, основной status всё ещё `accepted` |
+| `requested` | `confirmed` | Venue отменило `accepted` заказ |
+| `requested` | `rejected` | Venue уже начало приготовление |
+| `requested` | `failed` | Исчерпана политика retries |
+| `failed` | `requested` | Пользователь повторил отмену, заказ ещё `accepted` |
 
-Повтор той же команды в `requested` не создаёт новую outbox-запись. Отмена в
-`pending_confirmation`, `preparing`, `ready` или terminal status возвращает
-`409 ORDER_CANCELLATION_NOT_ALLOWED`.
+Точный повтор не создаёт новую outbox job. Pending-заказ отменяется локально
+только до первого claim confirmation job. В остальных недопустимых состояниях
+API возвращает `409 ORDER_CANCELLATION_NOT_ALLOWED`.
 
-## Правила применения событий
+## Callback events
 
-- Platform является владельцем публичного status и единственным сервисом,
-  который записывает его в своей БД.
-- Venue является владельцем локального статуса приготовления и источником
-  событий `order_preparing`, `order_ready`, `order_completed`,
-  `order_cancelled`.
-- Platform применяет venue event только к заказу этого authenticated venue.
-- `event_id` глобально уникален и обеспечивает дедупликацию.
-- `sequence` монотонен внутри одного заказа и начинается с 1.
-- Точное повторное событие возвращает идемпотентный успех.
-- Новый event с уже использованным sequence или gap возвращает
-  `409 EVENT_SEQUENCE_CONFLICT`.
-- `occurred_at` сохраняется для аудита, но не определяет порядок событий.
+- Venue создаёт `order_preparing`, `order_ready`, `order_completed` или
+  `order_cancelled` в одной транзакции с локальным переходом.
+- `event_id` дедуплицирует доставку.
+- `sequence` начинается с 1 и определяет порядок событий одного заказа.
+- Platform отклоняет gap и конфликтующий повтор sequence.
+- `occurred_at` используется для аудита, но не для определения порядка.
 
-## Причины отклонения подтверждения
+## Причины отказа venue
 
 | Reason | Значение |
 |---|---|
-| `venue_closed` | Заведение не принимает новые заказы |
-| `menu_changed` | Версия или цена не совпадает с локальным меню заведения |
-| `items_unavailable` | Одной или нескольких позиций/количества нет |
+| `venue_closed` | Venue не принимает новые заказы |
+| `menu_changed` | Версия или цена не совпадает |
+| `items_unavailable` | Позиции нет, она выключена или не хватает stock |
 
-Отклонение является сохранённым решением venue service. Повтор команды для того
-же `platform_order_id` всегда возвращает первоначальное решение, даже если меню
-или остатки позднее изменились.
+Решение сохраняется по `platform_order_id`. Повтор команды возвращает исходный
+результат, даже если меню и остатки после него изменились.
 
 ## Инварианты
 
-- Один заказ принадлежит ровно одному пользователю и одному заведению.
-- `order_items` являются snapshot и не изменяются после создания.
+- Один заказ относится к одному customer и одному venue.
+- `order_items` и цены не меняются после checkout.
 - `total_amount = items_amount + delivery_amount` без переполнения `int64`.
-- `accepted` означает, что venue service сохранило решение и резерв.
-- `cancelled` после пользовательской отмены означает, что резерв освобождён.
-- Текущее состояние, history и inbox/outbox record меняются атомарно.
-- Сетевой вызов никогда не выполняется внутри транзакции БД.
+- `accepted` означает сохранённое venue-решение и уменьшенный stock.
+- Подтверждённая пользовательская отмена освобождает stock один раз.
+- State, history и inbox/outbox меняются атомарно в пределах своей базы.
+- HTTP-вызовы не выполняются внутри транзакций БД.

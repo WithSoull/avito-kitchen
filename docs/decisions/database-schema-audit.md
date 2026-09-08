@@ -1,41 +1,39 @@
-# Аудит схем PostgreSQL перед реализацией repository
+# Физическая схема PostgreSQL
 
-Проверка выполнена после миграций platform `000004` и venue `000003`.
+Актуальная схема складывается из миграций platform `000001`–`000009` и venue
+`000001`–`000007`. Диаграммы показывают только физические внешние ключи:
+[platform ER](../diagrams/platform-er.svg) и [venue ER](../diagrams/venue-er.svg).
 
-## Владение и удаление данных
+## Владение и удаление
 
-- `venues` владеет категориями, позициями меню и заказами платформы.
-- `orders` владеет snapshot-позициями, историей статусов и partner events.
-- `venue_orders` владеет своими позициями заказа и outbox events.
-- Все внешние ключи сохраняют PostgreSQL `NO ACTION`. Это намеренно: в MVP
-  заведения и заказы не удаляются физически, меню снимается через `is_active`,
-  а случайный hard delete родителя должен завершаться ошибкой, а не каскадно
-  уничтожать историю.
-- Если позже появится retention job, его порядок удаления и допустимые CASCADE
-  правила потребуют отдельного решения и миграции.
+- `venues` связано с категориями, позициями меню и заказами platform.
+- `orders` связано с позициями заказа, историей и partner events.
+- `venue_orders` связано с позициями venue order и `venue_outbox`.
+- Внешние ключи используют `NO ACTION`: заказы и venues в MVP физически не
+  удаляются, а menu items выключаются через `is_active`.
 
-## Ограничения
+`outbox.aggregate_id` в platform — логическая ссылка без FK. Поэтому outbox не
+изображён дочерней таблицей `orders` на физической ER-диаграмме.
+`venue_menu_versions` также не имеет FK к `venue_menu_items`: таблица хранит факт
+публикации версии, а items представляют текущее состояние.
 
-- Идентификаторы агрегатов — UUID; деньги — неотрицательные `bigint`, количество
-  — положительный `integer`, версии и sequence — положительный `bigint`.
-- Статусы ограничены CHECK-constraints; cancellation state отделён от основного
-  состояния заказа.
-- Уникальности закрывают external ID в пределах venue, idempotency key в
-  пределах customer, tracking-token hash, platform order ID, event ID и
-  `(order_id, sequence)`.
-- Snapshot заказа продолжает ссылаться на menu item. Поскольку позиции меню
-  soft-delete, ссылка сохраняет целостность и не мешает историческим заказам.
+## Ограничения целостности
+
+- Основные идентификаторы — UUID.
+- Деньги — неотрицательный `bigint`, количество — положительный `integer`.
+- Version и event sequence — положительный `bigint`.
+- Статусы и типы outbox events ограничены `CHECK`.
+- Уникальные ограничения защищают external IDs, checkout idempotency scope,
+  tracking-token hash, platform order ID, event ID и `(order_id, sequence)`.
+- `order_items` сохраняет FK на menu item и собственный snapshot цены и названия.
 
 ## Индексы
 
-- Публичный каталог поддержан partial indexes доступных menu items и активных
-  категорий.
-- Polling/история заказа поддержаны индексами по customer/time, venue/status и
-  `order_id` дочерних таблиц.
-- Outbox workers используют partial indexes только для необработанных событий.
-- В venue добавлен индекс строк заказа по `venue_order_id`; unique index
-  `platform_order_id` обеспечивает идемпотентный поиск решения.
+- Partial indexes обслуживают активное меню и необработанные outbox rows.
+- Дочерние строки заказа индексированы по `order_id`/`venue_order_id`.
+- Platform orders индексированы по customer/time и venue/status.
+- Unique index `venue_orders.platform_order_id` используется для возврата
+  сохранённого идемпотентного решения.
 
-Повторная проверка query plans будет выполнена после появления реальных
-repository queries: индекс без подтверждённого access pattern заранее не
-добавляется.
+Management list пока не имеет полноценного keyset access pattern: он ограничен
+100 строками и загружает items отдельными запросами. Это отмечено в README.
