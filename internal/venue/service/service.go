@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/WithSoull/avito-kitchen/internal/shared/apperror"
 	shareduuid "github.com/WithSoull/avito-kitchen/internal/shared/uuid"
@@ -27,12 +28,13 @@ type OrdersService struct{ repository repository.Orders }
 func NewOrders(repo repository.Orders) *OrdersService { return &OrdersService{repository: repo} }
 
 func (service *OrdersService) DecideOrder(ctx context.Context, idempotencyKey string, command domain.OrderCommand) (domain.OrderDecision, error) {
-	if len(idempotencyKey) < 16 || len(idempotencyKey) > 128 || !shareduuid.IsValid(command.PlatformOrderID) || command.MenuVersion < 1 || len(command.Items) < 1 || len(command.Items) > 100 {
+	keyLength := utf8.RuneCountInString(idempotencyKey)
+	if keyLength < 16 || keyLength > 128 || !shareduuid.IsValid(command.PlatformOrderID) || command.MenuVersion < 1 || len(command.Items) < 1 || len(command.Items) > 100 {
 		return domain.OrderDecision{}, validationError()
 	}
 	seen := make(map[string]struct{}, len(command.Items))
 	for _, item := range command.Items {
-		if strings.TrimSpace(item.ExternalItemID) == "" || strings.TrimSpace(item.Name) == "" || item.Quantity < 1 || item.Quantity > 100 || item.ExpectedUnitPrice < 0 ||
+		if !validRequiredText(item.ExternalItemID, 128) || !validRequiredText(item.Name, 200) || item.Quantity < 1 || item.Quantity > 100 || item.ExpectedUnitPrice < 0 ||
 			(item.ExpectedUnitPrice > 0 && int64(item.Quantity) > math.MaxInt64/item.ExpectedUnitPrice) {
 			return domain.OrderDecision{}, validationError()
 		}
@@ -43,6 +45,10 @@ func (service *OrdersService) DecideOrder(ctx context.Context, idempotencyKey st
 	}
 	decision, err := service.repository.DecideOrder(ctx, idempotencyKey, command)
 	return decision, mapError(err)
+}
+
+func validRequiredText(value string, maxRunes int) bool {
+	return strings.TrimSpace(value) != "" && utf8.RuneCountInString(value) <= maxRunes
 }
 
 func (service *OrdersService) ListOrders(ctx context.Context) ([]domain.ManagedOrder, error) {

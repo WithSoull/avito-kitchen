@@ -29,6 +29,7 @@ type DBTX interface {
 
 type Transactor interface {
 	WithinTransaction(context.Context, func(context.Context, DBTX) error) error
+	WithinReadOnlyRepeatableRead(context.Context, func(context.Context, DBTX) error) error
 }
 
 type Pool struct {
@@ -102,7 +103,18 @@ func (readiness *MigrationReadiness) Ping(ctx context.Context) error {
 }
 
 func (p *Pool) WithinTransaction(ctx context.Context, operation func(context.Context, DBTX) error) error {
-	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	return p.withinTransaction(ctx, pgx.TxOptions{}, operation)
+}
+
+func (p *Pool) WithinReadOnlyRepeatableRead(ctx context.Context, operation func(context.Context, DBTX) error) error {
+	return p.withinTransaction(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	}, operation)
+}
+
+func (p *Pool) withinTransaction(ctx context.Context, options pgx.TxOptions, operation func(context.Context, DBTX) error) error {
+	tx, err := p.pool.BeginTx(ctx, options)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}

@@ -67,6 +67,21 @@ func TestPoolTransactionsAndStatementTimeout(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("committed row count = %d", count)
 	}
+	if err := database.WithinReadOnlyRepeatableRead(context.Background(), func(ctx context.Context, tx postgres.DBTX) error {
+		var isolation, readOnly string
+		if err := tx.QueryRow(ctx, "SHOW transaction_isolation").Scan(&isolation); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, "SHOW transaction_read_only").Scan(&readOnly); err != nil {
+			return err
+		}
+		if isolation != "repeatable read" || readOnly != "on" {
+			t.Fatalf("transaction isolation=%q read_only=%q", isolation, readOnly)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := database.QueryRow(context.Background(), "SELECT pg_sleep(0.5)").Scan(new(any)); err == nil {
 		t.Fatal("expected statement timeout")

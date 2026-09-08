@@ -1,5 +1,35 @@
 erDiagram
-  VENUE_ORDERS ||--|{ VENUE_ORDER_ITEMS : snapshots
-  VENUE_ORDERS ||--o{ VENUE_OUTBOX : emits
-  VENUE_MENU_VERSIONS ||--o{ VENUE_MENU_ITEMS : describes
-  VENUE_SETTINGS ||--|| VENUE_SETTINGS : singleton
+  VENUE_ORDERS ||--o{ VENUE_ORDER_ITEMS : "venue_order_id FK"
+  VENUE_ORDERS ||--o{ VENUE_OUTBOX : "venue_order_id FK"
+
+  VENUE_MENU_VERSIONS {
+    bigint version PK
+  }
+  VENUE_MENU_ITEMS {
+    text external_id PK
+    text category_external_id
+    integer stock_quantity
+  }
+  VENUE_SETTINGS {
+    boolean singleton PK
+  }
+  VENUE_ORDERS {
+    uuid id PK
+    uuid platform_order_id UK
+    bigint menu_version
+    text decision
+    text status
+  }
+  VENUE_ORDER_ITEMS {
+    uuid id PK
+    uuid venue_order_id FK
+    text external_item_id
+  }
+  VENUE_OUTBOX {
+    uuid id PK
+    uuid venue_order_id FK
+    uuid event_id UK
+    bigint sequence
+  }
+
+  %% Menu version, menu items and settings are separate tables without physical FKs.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/WithSoull/avito-kitchen/internal/platform/domain"
@@ -84,6 +85,18 @@ func TestPartnerSnapshotValidationHashAndErrorMapping(t *testing.T) {
 	if err := partner.ReplaceMenu(context.Background(), "venue", invalid); errorCode(err) != "VALIDATION_FAILED" || fake.calls != 2 {
 		t.Fatalf("validation error=%v calls=%d", err, fake.calls)
 	}
+	invalid = snapshot
+	invalid.Categories[0].Items[0].Description = strings.Repeat("я", 2001)
+	if err := partner.ReplaceMenu(context.Background(), "venue", invalid); errorCode(err) != "VALIDATION_FAILED" || fake.calls != 2 {
+		t.Fatalf("description validation error=%v calls=%d", err, fake.calls)
+	}
+	snapshot.Categories[0].Items[0].Description = ""
+	invalid = snapshot
+	invalid.Categories[0].Items[0].Price.Currency = "₽"
+	if err := partner.ReplaceMenu(context.Background(), "venue", invalid); errorCode(err) != "VALIDATION_FAILED" || fake.calls != 2 {
+		t.Fatalf("currency validation error=%v calls=%d", err, fake.calls)
+	}
+	snapshot.Categories[0].Items[0].Price.Currency = "RUB"
 	fake.err = repository.ErrStaleMenuVersion
 	if err := partner.ReplaceMenu(context.Background(), "venue", snapshot); errorCode(err) != "STALE_MENU_VERSION" {
 		t.Fatalf("stale error=%v", err)

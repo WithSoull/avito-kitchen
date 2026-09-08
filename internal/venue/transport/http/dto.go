@@ -3,6 +3,7 @@ package httptransport
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/WithSoull/avito-kitchen/internal/shared/apperror"
 	"github.com/WithSoull/avito-kitchen/internal/shared/httpx"
@@ -83,7 +84,7 @@ func (request orderCommandRequest) domain() (domain.OrderCommand, error) {
 	}
 	items := make([]domain.OrderItem, len(request.Items))
 	for i, item := range request.Items {
-		if strings.TrimSpace(item.ExternalItemID) == "" || strings.TrimSpace(item.Name) == "" || item.Quantity < 1 || item.Quantity > 100 || item.ExpectedUnitPrice < 0 {
+		if !validRequiredText(item.ExternalItemID, 128) || !validRequiredText(item.Name, 200) || item.Quantity < 1 || item.Quantity > 100 || item.ExpectedUnitPrice < 0 {
 			return domain.OrderCommand{}, invalidRequest()
 		}
 		items[i] = domain.OrderItem{ExternalItemID: item.ExternalItemID, Name: item.Name, Quantity: item.Quantity, ExpectedUnitPrice: item.ExpectedUnitPrice}
@@ -93,4 +94,8 @@ func (request orderCommandRequest) domain() (domain.OrderCommand, error) {
 
 func invalidRequest() error {
 	return apperror.New(apperror.KindValidation, "VALIDATION_FAILED", "request fields are invalid")
+}
+
+func validRequiredText(value string, maxRunes int) bool {
+	return strings.TrimSpace(value) != "" && utf8.RuneCountInString(value) <= maxRunes
 }

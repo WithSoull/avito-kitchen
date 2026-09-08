@@ -4,19 +4,30 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/WithSoull/avito-kitchen/internal/shared/postgres"
 	"github.com/WithSoull/avito-kitchen/internal/venue/domain"
 )
 
 func (r *Repository) CurrentMenu(ctx context.Context) (domain.MenuSnapshot, error) {
+	var snapshot domain.MenuSnapshot
+	err := r.transactor.WithinReadOnlyRepeatableRead(ctx, func(ctx context.Context, tx postgres.DBTX) error {
+		var err error
+		snapshot, err = currentMenu(ctx, tx)
+		return err
+	})
+	return snapshot, err
+}
+
+func currentMenu(ctx context.Context, db postgres.DBTX) (domain.MenuSnapshot, error) {
 	var version *int64
-	if err := r.db.QueryRow(ctx, "SELECT max(version) FROM venue_menu_versions").Scan(&version); err != nil {
+	if err := db.QueryRow(ctx, "SELECT max(version) FROM venue_menu_versions").Scan(&version); err != nil {
 		return domain.MenuSnapshot{}, fmt.Errorf("get venue menu version: %w", err)
 	}
 	if version == nil {
 		return domain.MenuSnapshot{}, ErrMenuNotFound
 	}
 
-	rows, err := r.db.Query(ctx, `
+	rows, err := db.Query(ctx, `
 		SELECT category_external_id, category_name, external_id, name, description,
 		       price_amount, currency, is_available AND (stock_quantity IS NULL OR stock_quantity > 0)
 		FROM venue_menu_items

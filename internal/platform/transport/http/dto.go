@@ -3,6 +3,7 @@ package httptransport
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/WithSoull/avito-kitchen/internal/platform/domain"
 	"github.com/WithSoull/avito-kitchen/internal/shared/apperror"
@@ -162,7 +163,7 @@ func orderDTO(order domain.Order) orderResponse {
 }
 
 func (request createOrderRequest) domain() (domain.CreateOrderRequest, error) {
-	if strings.TrimSpace(request.CustomerRef) == "" || len(request.CustomerRef) > 128 || !httpx.IsUUID(request.VenueID) || request.MenuVersion < 1 || len(request.Items) < 1 || len(request.Items) > 100 {
+	if !validRequiredText(request.CustomerRef, 128) || !httpx.IsUUID(request.VenueID) || request.MenuVersion < 1 || len(request.Items) < 1 || len(request.Items) > 100 {
 		return domain.CreateOrderRequest{}, invalidRequest()
 	}
 	items := make([]domain.OrderItemRequest, len(request.Items))
@@ -173,7 +174,8 @@ func (request createOrderRequest) domain() (domain.CreateOrderRequest, error) {
 		items[i] = domain.OrderItemRequest{MenuItemID: item.MenuItemID, Quantity: item.Quantity}
 	}
 	address := request.Delivery.Address
-	if strings.TrimSpace(address.City) == "" || strings.TrimSpace(address.Street) == "" || strings.TrimSpace(address.House) == "" || strings.TrimSpace(request.Delivery.Phone) == "" {
+	if !validRequiredText(address.City, 200) || !validRequiredText(address.Street, 200) || !validRequiredText(address.House, 50) ||
+		!validOptionalText(address.Apartment, 50) || strings.TrimSpace(request.Delivery.Phone) == "" || !validOptionalText(request.Delivery.Comment, 500) {
 		return domain.CreateOrderRequest{}, invalidRequest()
 	}
 	return domain.CreateOrderRequest{
@@ -212,12 +214,12 @@ func (request replaceMenuRequest) domain() (domain.MenuSnapshot, error) {
 	}
 	categories := make([]domain.MenuCategory, len(request.Categories))
 	for i, category := range request.Categories {
-		if strings.TrimSpace(category.ExternalID) == "" || strings.TrimSpace(category.Name) == "" || len(category.Items) > 1000 {
+		if !validRequiredText(category.ExternalID, 128) || !validRequiredText(category.Name, 200) || len(category.Items) > 1000 {
 			return domain.MenuSnapshot{}, invalidRequest()
 		}
 		items := make([]domain.MenuItem, len(category.Items))
 		for j, item := range category.Items {
-			if strings.TrimSpace(item.ExternalID) == "" || strings.TrimSpace(item.Name) == "" || item.Price.Amount < 0 || len(item.Price.Currency) != 3 {
+			if !validRequiredText(item.ExternalID, 128) || !validRequiredText(item.Name, 200) || !validOptionalText(item.Description, 2000) || item.Price.Amount < 0 || !validCurrency(item.Price.Currency) {
 				return domain.MenuSnapshot{}, invalidRequest()
 			}
 			items[j] = domain.MenuItem{ExternalID: item.ExternalID, Name: item.Name, Description: item.Description, Price: domain.Money{Amount: item.Price.Amount, Currency: item.Price.Currency}, IsAvailable: item.IsAvailable}
@@ -233,7 +235,7 @@ type availabilityUpdateRequest struct {
 }
 
 func (request availabilityUpdateRequest) domain() (domain.AvailabilityUpdate, error) {
-	if len(request.Reason) > 200 {
+	if !validOptionalText(request.Reason, 200) {
 		return domain.AvailabilityUpdate{}, invalidRequest()
 	}
 	return domain.AvailabilityUpdate{IsAcceptingOrders: request.IsAcceptingOrders, Reason: request.Reason}, nil
@@ -249,7 +251,7 @@ type orderEventRequest struct {
 
 func (request orderEventRequest) domain() (domain.OrderEvent, error) {
 	validType := request.Type == "order_preparing" || request.Type == "order_ready" || request.Type == "order_completed" || request.Type == "order_cancelled"
-	if !httpx.IsUUID(request.EventID) || request.Sequence < 1 || !validType || request.OccurredAt.IsZero() || len(request.Reason) > 500 {
+	if !httpx.IsUUID(request.EventID) || request.Sequence < 1 || !validType || request.OccurredAt.IsZero() || !validOptionalText(request.Reason, 500) {
 		return domain.OrderEvent{}, invalidRequest()
 	}
 	return domain.OrderEvent{EventID: request.EventID, Sequence: request.Sequence, Type: request.Type, OccurredAt: request.OccurredAt, Reason: request.Reason}, nil
@@ -257,4 +259,24 @@ func (request orderEventRequest) domain() (domain.OrderEvent, error) {
 
 func invalidRequest() error {
 	return apperror.New(apperror.KindValidation, "VALIDATION_FAILED", "request fields are invalid")
+}
+
+func validRequiredText(value string, maxRunes int) bool {
+	return strings.TrimSpace(value) != "" && utf8.RuneCountInString(value) <= maxRunes
+}
+
+func validOptionalText(value string, maxRunes int) bool {
+	return utf8.RuneCountInString(value) <= maxRunes
+}
+
+func validCurrency(value string) bool {
+	if len(value) != 3 {
+		return false
+	}
+	for _, symbol := range []byte(value) {
+		if symbol < 'A' || symbol > 'Z' {
+			return false
+		}
+	}
+	return true
 }

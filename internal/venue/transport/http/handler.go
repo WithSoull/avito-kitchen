@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/WithSoull/avito-kitchen/internal/shared/apperror"
 	"github.com/WithSoull/avito-kitchen/internal/shared/httpx"
@@ -76,7 +77,8 @@ func (h *Handler) decideOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idempotencyKey := r.Header.Get("Idempotency-Key")
-	if len(idempotencyKey) < 16 || len(idempotencyKey) > 128 {
+	keyLength := utf8.RuneCountInString(idempotencyKey)
+	if keyLength < 16 || keyLength > 128 {
 		httpx.WriteProblem(w, r, malformedRequest())
 		return
 	}

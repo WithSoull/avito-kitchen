@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,11 @@ func TestCreateOrderValidationAndPreparation(t *testing.T) {
 	invalid.Delivery.Phone = "89990000000"
 	if _, err := orders.CreateOrder(context.Background(), "idempotency-key-0003", invalid); errorCode(err) != "VALIDATION_FAILED" {
 		t.Fatalf("phone error = %v", err)
+	}
+	invalid = validCheckout()
+	invalid.Delivery.Address.City = strings.Repeat("я", 201)
+	if _, err := orders.CreateOrder(context.Background(), "idempotency-key-0003", invalid); errorCode(err) != "VALIDATION_FAILED" {
+		t.Fatalf("city length error = %v", err)
 	}
 
 	fake.err = repository.ErrIdempotencyKeyReused

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/WithSoull/avito-kitchen/internal/platform/domain"
+	"github.com/WithSoull/avito-kitchen/internal/shared/postgres"
 )
 
 func (r *Repository) ListVenues(ctx context.Context, query domain.VenueListQuery) (domain.VenuePage, error) {
@@ -65,10 +66,20 @@ func (r *Repository) GetVenue(ctx context.Context, venueID string) (domain.Venue
 }
 
 func (r *Repository) GetMenu(ctx context.Context, venueID string) (domain.Menu, error) {
+	var menu domain.Menu
+	err := r.transactor.WithinReadOnlyRepeatableRead(ctx, func(ctx context.Context, tx postgres.DBTX) error {
+		var err error
+		menu, err = getMenu(ctx, tx, venueID)
+		return err
+	})
+	return menu, err
+}
+
+func getMenu(ctx context.Context, db postgres.DBTX, venueID string) (domain.Menu, error) {
 	menu := domain.Menu{VenueID: venueID}
 	var version *int64
 	var updatedAt *time.Time
-	err := r.db.QueryRow(ctx, "SELECT menu_version, menu_updated_at FROM venues WHERE id = $1", venueID).Scan(&version, &updatedAt)
+	err := db.QueryRow(ctx, "SELECT menu_version, menu_updated_at FROM venues WHERE id = $1", venueID).Scan(&version, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Menu{}, ErrVenueNotFound
 	}
@@ -81,7 +92,7 @@ func (r *Repository) GetMenu(ctx context.Context, venueID string) (domain.Menu, 
 	menu.Version = *version
 	menu.UpdatedAt = *updatedAt
 
-	categoryRows, err := r.db.Query(ctx, `
+	categoryRows, err := db.Query(ctx, `
 		SELECT external_id, name FROM menu_categories
 		WHERE venue_id = $1 AND is_active
 		ORDER BY position, external_id`, venueID)
@@ -103,7 +114,7 @@ func (r *Repository) GetMenu(ctx context.Context, venueID string) (domain.Menu, 
 	}
 	categoryRows.Close()
 
-	itemRows, err := r.db.Query(ctx, `
+	itemRows, err := db.Query(ctx, `
 		SELECT c.external_id, i.id, i.external_id, i.name, i.description, i.price_amount, i.currency, i.is_available
 		FROM menu_items i
 		JOIN menu_categories c ON c.id = i.category_id
@@ -123,7 +134,11 @@ func (r *Repository) GetMenu(ctx context.Context, venueID string) (domain.Menu, 
 		if err := itemRows.Scan(&categoryID, &item.ID, &item.ExternalID, &item.Name, &item.Description, &item.Price.Amount, &item.Price.Currency, &item.IsAvailable); err != nil {
 			return domain.Menu{}, fmt.Errorf("scan menu item: %w", err)
 		}
-		menu.Categories[categories[categoryID]].Items = append(menu.Categories[categories[categoryID]].Items, item)
+		categoryIndex, exists := categories[categoryID]
+		if !exists {
+			return domain.Menu{}, fmt.Errorf("menu item references an inactive category %q", categoryID)
+		}
+		menu.Categories[categoryIndex].Items = append(menu.Categories[categoryIndex].Items, item)
 	}
 	if err := itemRows.Err(); err != nil {
 		return domain.Menu{}, fmt.Errorf("iterate menu items: %w", err)

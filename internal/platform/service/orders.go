@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/WithSoull/avito-kitchen/internal/platform/domain"
 	"github.com/WithSoull/avito-kitchen/internal/platform/security/ordertoken"
@@ -60,10 +61,12 @@ func (service *OrdersService) CancelOrder(ctx context.Context, orderID, tokenHas
 }
 
 func validateCheckout(key string, request domain.CreateOrderRequest) error {
-	if len(key) < 16 || len(key) > 128 || request.CustomerRef == "" || len(request.CustomerRef) > 128 ||
+	keyLength := utf8.RuneCountInString(key)
+	if keyLength < 16 || keyLength > 128 || !validRequiredText(request.CustomerRef, 128) ||
 		!shareduuid.IsValid(request.VenueID) || request.MenuVersion < 1 || len(request.Items) < 1 || len(request.Items) > 100 ||
-		request.Delivery.Address.City == "" || request.Delivery.Address.Street == "" || request.Delivery.Address.House == "" ||
-		!phonePattern.MatchString(request.Delivery.Phone) || len(request.Delivery.Comment) > 500 {
+		!validRequiredText(request.Delivery.Address.City, 200) || !validRequiredText(request.Delivery.Address.Street, 200) ||
+		!validRequiredText(request.Delivery.Address.House, 50) || !validOptionalText(request.Delivery.Address.Apartment, 50) ||
+		!phonePattern.MatchString(request.Delivery.Phone) || !validOptionalText(request.Delivery.Comment, 500) {
 		return invalidRequest("checkout fields are invalid")
 	}
 	seen := make(map[string]struct{}, len(request.Items))

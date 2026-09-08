@@ -1,8 +1,56 @@
 erDiagram
-  VENUES ||--o{ MENU_CATEGORIES : owns
-  VENUES ||--o{ MENU_ITEMS : owns
-  VENUES ||--o{ ORDERS : receives
-  ORDERS ||--|{ ORDER_ITEMS : snapshots
-  ORDERS ||--o{ ORDER_STATUS_HISTORY : records
-  ORDERS ||--o{ PARTNER_ORDER_EVENTS : deduplicates
-  ORDERS ||--o{ OUTBOX : dispatches
+  VENUES ||--o{ MENU_CATEGORIES : "venue_id FK"
+  VENUES ||--o{ MENU_ITEMS : "venue_id FK"
+  MENU_CATEGORIES ||--o{ MENU_ITEMS : "category_id FK"
+  VENUES ||--o{ ORDERS : "venue_id FK"
+  ORDERS ||--o{ ORDER_ITEMS : "order_id FK"
+  MENU_ITEMS ||--o{ ORDER_ITEMS : "menu_item_id FK"
+  ORDERS ||--o{ ORDER_STATUS_HISTORY : "order_id FK"
+  ORDERS ||--o{ PARTNER_ORDER_EVENTS : "order_id FK"
+
+  VENUES {
+    uuid id PK
+    text external_id UK
+    bigint menu_version
+    text menu_snapshot_hash
+  }
+  MENU_CATEGORIES {
+    uuid id PK
+    uuid venue_id FK
+    text external_id
+  }
+  MENU_ITEMS {
+    uuid id PK
+    uuid venue_id FK
+    uuid category_id FK
+    text external_id
+  }
+  ORDERS {
+    uuid id PK
+    uuid venue_id FK
+    text customer_ref
+    text idempotency_key
+    text status
+  }
+  ORDER_ITEMS {
+    uuid id PK
+    uuid order_id FK
+    uuid menu_item_id FK
+  }
+  ORDER_STATUS_HISTORY {
+    uuid id PK
+    uuid order_id FK
+  }
+  PARTNER_ORDER_EVENTS {
+    uuid event_id PK
+    uuid order_id FK
+    bigint sequence
+  }
+  OUTBOX {
+    uuid id PK
+    uuid aggregate_id
+    text aggregate_type
+    text event_type
+  }
+
+  %% outbox.aggregate_id is an application-level reference; the schema has no FK.

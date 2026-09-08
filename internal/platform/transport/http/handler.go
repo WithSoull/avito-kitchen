@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/WithSoull/avito-kitchen/internal/platform/auth"
 	"github.com/WithSoull/avito-kitchen/internal/platform/security/ordertoken"
@@ -152,7 +153,8 @@ func (h *Handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idempotencyKey := r.Header.Get("Idempotency-Key")
-	if len(idempotencyKey) < 16 || len(idempotencyKey) > 128 {
+	keyLength := utf8.RuneCountInString(idempotencyKey)
+	if keyLength < 16 || keyLength > 128 {
 		httpx.WriteProblem(w, r, malformedRequest())
 		return
 	}

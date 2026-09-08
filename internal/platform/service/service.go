@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/WithSoull/avito-kitchen/internal/platform/domain"
 	"github.com/WithSoull/avito-kitchen/internal/platform/repository"
@@ -52,7 +53,7 @@ func (service *CatalogService) ListVenues(ctx context.Context, search, cursor st
 	if limit == 0 {
 		limit = 20
 	}
-	if limit < 1 || limit > 100 || len(search) > 200 {
+	if limit < 1 || limit > 100 || utf8.RuneCountInString(search) > 200 {
 		return domain.VenuePage{}, invalidRequest("catalog query is invalid")
 	}
 	afterID, err := decodeCursor(cursor)
@@ -128,7 +129,7 @@ func canonicalSnapshot(snapshot domain.MenuSnapshot) hashSnapshot {
 }
 
 func (service *PartnerService) UpdateAvailability(ctx context.Context, venueID string, update domain.AvailabilityUpdate) error {
-	if len(update.Reason) > 200 {
+	if utf8.RuneCountInString(update.Reason) > 200 {
 		return invalidRequest("availability reason is too long")
 	}
 	return mapRepositoryError(service.repository.UpdateAvailability(ctx, venueID, update))
@@ -136,7 +137,7 @@ func (service *PartnerService) UpdateAvailability(ctx context.Context, venueID s
 
 func (service *PartnerService) RecordOrderEvent(ctx context.Context, venueID, orderID string, event domain.OrderEvent) error {
 	validType := event.Type == "order_preparing" || event.Type == "order_ready" || event.Type == "order_completed" || event.Type == "order_cancelled"
-	if !shareduuid.IsValid(event.EventID) || event.Sequence < 1 || !validType || event.OccurredAt.IsZero() || len(event.Reason) > 500 {
+	if !shareduuid.IsValid(event.EventID) || event.Sequence < 1 || !validType || event.OccurredAt.IsZero() || utf8.RuneCountInString(event.Reason) > 500 {
 		return invalidRequest("order event is invalid")
 	}
 	return mapRepositoryError(service.repository.RecordOrderEvent(ctx, venueID, orderID, event))
@@ -149,7 +150,7 @@ func validateSnapshot(snapshot domain.MenuSnapshot) error {
 	categories := make(map[string]struct{}, len(snapshot.Categories))
 	items := make(map[string]struct{})
 	for _, category := range snapshot.Categories {
-		if strings.TrimSpace(category.ExternalID) == "" || strings.TrimSpace(category.Name) == "" {
+		if !validRequiredText(category.ExternalID, 128) || !validRequiredText(category.Name, 200) {
 			return invalidRequest("menu category is invalid")
 		}
 		if _, exists := categories[category.ExternalID]; exists {
@@ -160,7 +161,8 @@ func validateSnapshot(snapshot domain.MenuSnapshot) error {
 			return invalidRequest("menu category has too many items")
 		}
 		for _, item := range category.Items {
-			if strings.TrimSpace(item.ExternalID) == "" || strings.TrimSpace(item.Name) == "" || item.Price.Amount < 0 || len(item.Price.Currency) != 3 || item.Price.Currency != strings.ToUpper(item.Price.Currency) {
+			if !validRequiredText(item.ExternalID, 128) || !validRequiredText(item.Name, 200) || !validOptionalText(item.Description, 2000) ||
+				item.Price.Amount < 0 || !validCurrency(item.Price.Currency) {
 				return invalidRequest("menu item is invalid")
 			}
 			if _, exists := items[item.ExternalID]; exists {
@@ -170,6 +172,26 @@ func validateSnapshot(snapshot domain.MenuSnapshot) error {
 		}
 	}
 	return nil
+}
+
+func validRequiredText(value string, maxRunes int) bool {
+	return strings.TrimSpace(value) != "" && utf8.RuneCountInString(value) <= maxRunes
+}
+
+func validOptionalText(value string, maxRunes int) bool {
+	return utf8.RuneCountInString(value) <= maxRunes
+}
+
+func validCurrency(value string) bool {
+	if len(value) != 3 {
+		return false
+	}
+	for _, symbol := range []byte(value) {
+		if symbol < 'A' || symbol > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeCursor(cursor string) (string, error) {

@@ -141,6 +141,9 @@ local/production запуск с ними запрещён.
   registry не реализованы.
 - Delivery price равен нулю, геозоны и ETA отсутствуют.
 - Management list ограничен 100 строками без cursor navigation.
+- После `confirmation_expired` автоматическая reconciliation не выполняется:
+  потерянный HTTP-ответ может оставить принятое venue-решение и резерв, о которых
+  platform не узнала. Варианты усиления описаны в журнале trade-offs.
 - Метрики хранятся в памяти процесса; pending queue и oldest age проверяются SQL
   из runbook. OpenTelemetry, broker и distributed rate limiting не добавлялись.
 - Callback с постоянной конфигурационной ошибкой остаётся на capped retry до
